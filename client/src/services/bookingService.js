@@ -11,3 +11,11 @@ export const getShowById = (id) => api.get(`/shows/${id}`).then((res) => res.dat
 
 export const getTheaters = (city) =>
   api.get("/theaters", { params: city ? { city } : {} }).then((res) => res.data);
+
+export const createBooking = ({ showId, seats }) =>
+  api.post("/bookings", { showId, seats }).then((res) => res.data);
+ 
+export const getMyBookings = () => api.get("/bookings/my").then((res) => res.data);
+ 
+export const cancelBooking = (id) =>
+  api.put(`/bookings/${id}/cancel`).then((res) => res.data);

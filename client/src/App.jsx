@@ -4,6 +4,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import NotFound from "./pages/NotFound";
 import MovieDetails from "./pages/MovieDetails";
+import SeatSelection from "./pages/SeatSelection";
 import MainLayout from "./layouts/MainLayout";
 import { AuthProvider } from "./context/AuthContext";
 
@@ -19,6 +20,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/movies/:id" element={<MovieDetails />} />
+            <Route path="/shows/:showId/seats" element={<SeatSelection />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
