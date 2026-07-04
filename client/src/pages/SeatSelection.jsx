@@ -6,9 +6,13 @@ import SeatCountModal from "../components/SeatCountModal";
 // Matches server/models/Show.js seat sub-document: { seatId, row, number, category, status, lockedBy }
 // status is one of "available" | "locked" | "booked" (server/socket/socketHandlers.js, server/controllers/bookingController.js)
 
-const CATEGORY_LABEL = { premium: "Premium", classic: "Classic" };
-
-const seatKey = (row, number) => `${row}${number}`;
+// Seat sub-document only has { seatId, status, lockedBy, lockedAt } — row/number
+// are NOT stored separately, so we parse them out of seatId (e.g. "A1" -> row "A", number 1).
+function parseSeatId(seatId) {
+  const match = /^([A-Za-z]+)(\d+)$/.exec(seatId || "");
+  if (!match) return { row: seatId || "?", number: 0 };
+  return { row: match[1], number: Number(match[2]) };
+}
 
 export default function SeatSelection() {
   const { showId } = useParams();
@@ -126,6 +130,10 @@ export default function SeatSelection() {
       setSelected((prev) => dropSeat(prev, seat.seatId));
       setShow((prev) => patchSeat(prev, seat.seatId, { status: "available", lockedBy: null }));
     } else {
+      if (selected.size >= seatCount) {
+        setError(`You can only pick ${seatCount} seat${seatCount > 1 ? "s" : ""}. Deselect one first.`);
+        return;
+      }
       socket.emit("lockSeat", { showId, seatId: seat.seatId });
       // optimistic: assume the lock succeeds; seatUnavailable will correct us if not
       setSelected((prev) => new Set(prev).add(seat.seatId));
@@ -161,152 +169,146 @@ export default function SeatSelection() {
 
   return (
     <>
-  <div className="min-h-screen bg-[#111827] text-white flex flex-col">
+      <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_#1a2036_0%,_#0a0d18_60%)] text-white flex flex-col">
 
-    {/* Header */}
-    <div className="py-5 text-center">
-      <h1 className="text-xl font-semibold">
-        {show.movie?.title}
-      </h1>
+        {/* Header */}
+        <div className="pt-6 pb-2 text-center">
+          <h1 className="text-lg font-semibold">
+            {show.movie?.title}
+          </h1>
 
-      <p className="text-sm text-gray-400 mt-1">
-        {show.theater?.name} •{" "}
-        {new Date(show.screenTime).toLocaleString()}
-      </p>
-    </div>
-
-    {/* Screen */}
-    <div className="flex justify-center mb-8">
-      <div className="relative w-[85%] max-w-xl">
-        <div className="h-5 rounded-full bg-gradient-to-b from-gray-300 to-gray-500 shadow-xl" />
-        <p className="text-center text-[11px] tracking-[8px] text-gray-400 mt-2">
-          SCREEN
-        </p>
-      </div>
-    </div>
-
-    {/* Seats */}
-    <div className="flex justify-center">
-      <div className="space-y-4">
-        {rows.map(({ row, seats }) => (
-          <div
-            key={row}
-            className="flex items-center gap-4"
-          >
-            <div className="w-4 text-xs text-gray-500">
-              {row}
-            </div>
-
-            <div className="grid grid-cols-16 gap-2">
-              {seats.map((seat, index) => (
-                <>
-                  {index === 8 && (
-                    <div className="w-6"></div>
-                  )}
-
-                  <SeatButton
-                    key={seat.seatId}
-                    seat={seat}
-                    isMine={selected.has(seat.seatId)}
-                    onClick={() => toggleSeat(seat)}
-                  />
-                </>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-
-    {/* Bottom */}
-    <div className="mt-auto bg-[#0f172a] border-t border-gray-700">
-      <div className="flex justify-center gap-8 py-3">
-
-        <Legend swatch="bg-gray-500" label="Available" />
-
-        <Legend swatch="bg-yellow-400" label="Selected" />
-
-        <Legend swatch="bg-gray-800 border border-gray-600" label="Locked" />
-
-        <Legend swatch="bg-gray-900" label="Booked" />
-
-      </div>
-
-      <div className="border-t border-gray-700 px-6 py-4 flex justify-between items-center">
-
-        <div>
-          <p className="text-sm text-gray-400">
-            {selectedSeats.length} Seat
-          </p>
-
-          <p className="text-xl font-bold">
-            ₹{total}
+          <p className="text-xs text-gray-400 mt-1">
+            {show.theater?.name} •{" "}
+            {formatShowDateTime(show.date, show.time)}
           </p>
         </div>
 
-        <button
-          onClick={confirmBooking}
-          disabled={selectedSeats.length === 0 || booking}
-          className="bg-yellow-400 text-black font-semibold px-7 py-3 rounded-lg disabled:opacity-50"
-        >
-          {booking ? "Booking..." : "Select Seats"}
-        </button>
+        {error && (
+          <p className="text-center text-xs text-red-400 mt-1 mb-1">{error}</p>
+        )}
 
+        {/* Screen */}
+        <div className="flex justify-center mt-4 mb-8">
+          <div className="w-[70%] max-w-md">
+            <div
+              className="h-4 bg-gradient-to-b from-slate-200/80 to-slate-400/10"
+              style={{
+                borderRadius: "50% 50% 0 0 / 100% 100% 0 0",
+                boxShadow: "0 6px 24px 4px rgba(180,200,255,0.25)",
+              }}
+            />
+            <p className="text-center text-[10px] tracking-[6px] text-gray-500 mt-2">
+              SCREEN
+            </p>
+          </div>
+        </div>
+
+        {/* Seats */}
+        <div className="flex justify-center px-4 overflow-x-auto flex-1">
+          <div className="bg-white/[0.03] rounded-2xl px-6 py-6">
+            <div className="space-y-1.5">
+              {rows.map(({ row, seats }) => {
+                const third = Math.max(1, Math.round(seats.length / 3));
+                return (
+                  <div key={row} className="flex items-center gap-3">
+                    <div className="w-3 text-[10px] text-gray-500 text-right shrink-0">
+                      {row}
+                    </div>
+
+                    <div className="flex items-center gap-[3px]">
+                      {seats.map((seat, index) => (
+                        <div key={seat.seatId} className="flex items-center gap-[3px]">
+                          {(index === third || index === third * 2) && (
+                            <div className="w-2" />
+                          )}
+                          <SeatButton
+                            seat={seat}
+                            isMine={selected.has(seat.seatId)}
+                            onClick={() => toggleSeat(seat)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom */}
+        <div className="mt-4 bg-[#0d1120] border-t border-white/5">
+          <div className="flex justify-center gap-8 py-4">
+            <Legend swatch="bg-slate-400" label="Available" />
+            <Legend swatch="bg-yellow-400" label="Selected" />
+            <Legend swatch="bg-slate-700" label="Reserved" />
+          </div>
+
+          <div className="border-t border-white/5 px-6 py-4 flex justify-between items-center">
+            <div>
+              <p className="text-sm text-gray-400">
+                {selectedSeats.length} Seat{selectedSeats.length !== 1 ? "s" : ""}
+              </p>
+              <p className="text-xl font-bold">
+                ₹{total}
+              </p>
+            </div>
+
+            <button
+              onClick={confirmBooking}
+              disabled={selectedSeats.length === 0 || booking}
+              className="bg-yellow-400 text-black font-semibold px-7 py-3 rounded-lg disabled:opacity-50"
+            >
+              {booking ? "Booking..." : "Select Seats"}
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
-  <SeatCountModal
-  open={showSeatModal}
-  movieTitle={show.movie?.title}
-  count={seatCount}
-  max={10}
-  onChangeCount={setSeatCount}
-  onConfirm={() => setShowSeatModal(false)}
-/>
-</>
-);
+
+      <SeatCountModal
+        open={showSeatModal}
+        movieTitle={show.movie?.title}
+        count={seatCount}
+        max={10}
+        price={show.price}
+        onChangeCount={setSeatCount}
+        onConfirm={() => setShowSeatModal(false)}
+        onSkip={() => setShowSeatModal(false)}
+      />
+    </>
+  );
 }
 
 function SeatButton({ seat, isMine, onClick }) {
-
-  let color =
-    "bg-gray-500 hover:bg-gray-400 text-transparent";
-
+  let color = "bg-slate-400 hover:bg-slate-300 text-transparent";
   let disabled = false;
 
   if (seat.status === "booked") {
-    color =
-      "bg-gray-900 text-transparent";
+    color = "bg-slate-700/70 text-transparent cursor-not-allowed";
     disabled = true;
-  }
-
-  else if (seat.status === "locked" && !isMine) {
-    color =
-      "bg-gray-700 text-transparent";
+  } else if (seat.status === "locked" && !isMine) {
+    color = "bg-slate-600/70 text-transparent cursor-not-allowed";
     disabled = true;
-  }
-
-  else if (isMine) {
-    color =
-      "bg-yellow-400 text-black";
+  } else if (isMine) {
+    color = "bg-yellow-400 text-black font-semibold";
   }
 
   return (
     <button
       disabled={disabled}
       onClick={onClick}
-      className={`w-5 h-5 rounded-sm border border-gray-600 transition ${color}`}
       title={seat.seatId}
+      className={`w-[13px] h-[13px] rounded-[3px] text-[7px] leading-none transition-transform active:scale-90 ${color}`}
     >
-      {isMine ? seat.number : ""}
+      {isMine ? parseSeatId(seat.seatId).number : ""}
     </button>
   );
 }
 
 function Legend({ swatch, label }) {
   return (
-    <div className="flex items-center gap-2 text-xs text-gray-400">
-      <span className={`w-3 h-3 rounded ${swatch}`}></span>
+    <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+      <span className={`w-2.5 h-2.5 rounded-full ${swatch}`}></span>
       {label}
     </div>
   );
@@ -316,14 +318,15 @@ function Legend({ swatch, label }) {
 function groupByRow(seats) {
   const map = new Map();
   seats.forEach((seat) => {
-    if (!map.has(seat.row)) map.set(seat.row, []);
-    map.get(seat.row).push(seat);
+    const { row } = parseSeatId(seat.seatId);
+    if (!map.has(row)) map.set(row, []);
+    map.get(row).push(seat);
   });
   return [...map.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([row, list]) => ({
       row,
-      seats: list.sort((a, b) => a.number - b.number),
+      seats: list.sort((a, b) => parseSeatId(a.seatId).number - parseSeatId(b.seatId).number),
     }));
 }
 
@@ -339,4 +342,20 @@ function dropSeat(set, seatId) {
   const next = new Set(set);
   next.delete(seatId);
   return next;
+}
+
+// Show schema stores date ("YYYY-MM-DD") and time ("HH:mm") as separate strings,
+// not a combined screenTime — combine them here instead of new Date(show.screenTime),
+// which was always Invalid Date.
+function formatShowDateTime(date, time) {
+  if (!date || !time) return "Time unavailable";
+  const parsed = new Date(`${date}T${time}`);
+  if (Number.isNaN(parsed.getTime())) return `${date} ${time}`;
+  return parsed.toLocaleString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

@@ -17,7 +17,9 @@ export default function SeatCountModal({
   count,
   onChangeCount,
   onConfirm,
+  onSkip,
   movieTitle,
+  price,
 }) {
   const tier = useMemo(() => tierFor(count), [count]);
 
@@ -33,7 +35,7 @@ export default function SeatCountModal({
         </div>
 
         {/* Movie name */}
-        <div className="text-center pt-3 pb-2 border-b">
+        <div className="text-center pt-3 pb-2 border-b border-gray-100">
           <h2 className="text-sm font-medium text-gray-500">
             {movieTitle}
           </h2>
@@ -76,8 +78,22 @@ export default function SeatCountModal({
           ))}
         </div>
 
+        {/* Price */}
+        {typeof price === "number" && (
+          <div className="flex justify-center mt-6 pt-5 pb-1 px-6 border-t border-gray-100">
+            <div className="text-center">
+              <p className="text-xs tracking-widest text-gray-400 font-medium">
+                PRICE PER SEAT
+              </p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">
+                ₹{price}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* CTA */}
-        <div className="px-5 mt-7">
+        <div className="px-5 mt-6">
           <button
             onClick={onConfirm}
             className="w-full bg-red-500 text-white py-3 rounded-xl font-semibold active:scale-[0.99]"
@@ -88,7 +104,7 @@ export default function SeatCountModal({
 
         {/* Skip */}
         <button
-          onClick={onConfirm}
+          onClick={onSkip || onConfirm}
           className="w-full py-4 text-sm text-gray-500"
         >
           Skip
