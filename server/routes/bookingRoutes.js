@@ -18,4 +18,9 @@ router.get("/my", protect, getMyBookings);
 // Cancel a booking
 router.put("/:id/cancel", protect, cancelBooking);
 
+
+router.post("/create-order", authMiddleware, bookingController.createOrder);
+router.post("/verify-payment", authMiddleware, bookingController.verifyPayment);
+
 module.exports = router;
+

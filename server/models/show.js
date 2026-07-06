@@ -1,12 +1,12 @@
 const mongoose = require("mongoose");
 
 const seatSchema = new mongoose.Schema(
-  {
-    seatId: { type: String, required: true }, // e.g. "A1"
-    status: { type: String, enum: ["available", "locked", "booked"], default: "available" },
-    lockedBy: { type: String, default: null }, // socket id holding temp lock
-    lockedAt: { type: Date, default: null },
-  },
+{
+  seatId: String,
+  status: { type: String, enum: ["available", "locked", "booked"], default: "available" },
+  lockedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  lockedAt: { type: Date, default: null },
+},
   { _id: false }
 );
 
