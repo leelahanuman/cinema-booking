@@ -4,7 +4,7 @@ const seatSchema = new mongoose.Schema(
 {
   seatId: String,
   status: { type: String, enum: ["available", "locked", "booked"], default: "available" },
-  lockedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  lockedBy: { type: String, default: null },
   lockedAt: { type: Date, default: null },
 },
   { _id: false }

@@ -13,12 +13,20 @@ const movieRoutes = require("./routes/movieRoutes.js");
 const theaterRoutes = require("./routes/theaterRoutes.js");
 const showRoutes = require("./routes/showRoutes.js");
 const bookingRoutes = require("./routes/bookingRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+const webhookRoutes = require("./routes/webhookRoutes");
 
 connectDB();
 
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_URL || "*" }));
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf; // needed for Razorpay signature verification
+    },
+  })
+);
 
 app.get("/", (req, res) => res.json({ message: "Cinema Booking API is running" }));
 
@@ -27,7 +35,8 @@ app.use("/api/movies", movieRoutes);
 app.use("/api/theaters", theaterRoutes);
 app.use("/api/shows", showRoutes);
 app.use("/api/bookings", bookingRoutes);
-
+app.use("/api/payments", paymentRoutes);
+app.use("/api/webhooks/razorpay", webhookRoutes);
 app.use(notFound);
 app.use(errorHandler);
 

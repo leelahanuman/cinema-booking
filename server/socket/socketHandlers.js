@@ -1,6 +1,6 @@
 const Show = require("../models/Show");
 
-const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const { SEAT_LOCK_TIMEOUT_MS: LOCK_TIMEOUT_MS } = require("../config/constants");
 
 const registerSocketHandlers = (io) => {
   io.on("connection", (socket) => {

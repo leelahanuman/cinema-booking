@@ -4,15 +4,12 @@ const Booking = require("../models/Booking");
 const Payment = require("../models/Payment");
 const generateBookingCode = require("../utils/generateBookingCode");
 
-// @desc   Razorpay webhook — book ni ikkada confirm chestham
-// @route  POST /api/webhooks/razorpay
-// @access Public (signature verified)
 const razorpayWebhook = async (req, res) => {
   try {
     const signature = req.headers["x-razorpay-signature"];
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
-      .update(req.rawBody) // raw body needed
+      .update(req.rawBody)
       .digest("hex");
 
     if (signature !== expected) {
@@ -20,6 +17,7 @@ const razorpayWebhook = async (req, res) => {
     }
 
     const event = req.body.event;
+    const io = req.app.get("io");
 
     if (event === "payment.captured") {
       const paymentEntity = req.body.payload.payment.entity;
@@ -28,7 +26,6 @@ const razorpayWebhook = async (req, res) => {
       const payment = await Payment.findOne({ razorpayOrderId: orderId });
       if (!payment) return res.status(404).json({ message: "Payment record not found" });
 
-      // Idempotency check — already processed aithe skip
       if (payment.status === "paid") {
         return res.status(200).json({ message: "Already processed" });
       }
@@ -42,6 +39,20 @@ const razorpayWebhook = async (req, res) => {
       if (alreadyBooked) {
         payment.status = "failed";
         await payment.save();
+
+        await Show.updateOne(
+          { _id: payment.show },
+          {
+            $set: {
+              "seats.$[el].status": "available",
+              "seats.$[el].lockedBy": null,
+              "seats.$[el].lockedAt": null,
+            },
+          },
+          { arrayFilters: [{ "el.seatId": { $in: payment.seats }, "el.status": { $ne: "booked" } }] }
+        );
+        io.to(`show:${payment.show}`).emit("seatsReleased", { seats: payment.seats });
+
         // TODO: trigger refund via razorpay.payments.refund()
         return res.status(200).json({ message: "Seats conflict, refund needed" });
       }
@@ -73,11 +84,31 @@ const razorpayWebhook = async (req, res) => {
       payment.booking = booking._id;
       await payment.save();
 
+      io.to(`show:${payment.show}`).emit("seatsBooked", { seats: payment.seats });
     }
 
     if (event === "payment.failed") {
       const orderId = req.body.payload.payment.entity.order_id;
-      await Payment.updateOne({ razorpayOrderId: orderId }, { status: "failed" });
+      const payment = await Payment.findOneAndUpdate(
+        { razorpayOrderId: orderId },
+        { status: "failed" },
+        { new: true }
+      );
+
+      if (payment) {
+        await Show.updateOne(
+          { _id: payment.show },
+          {
+            $set: {
+              "seats.$[el].status": "available",
+              "seats.$[el].lockedBy": null,
+              "seats.$[el].lockedAt": null,
+            },
+          },
+          { arrayFilters: [{ "el.seatId": { $in: payment.seats } }] }
+        );
+        io.to(`show:${payment.show}`).emit("seatsReleased", { seats: payment.seats });
+      }
     }
 
     res.status(200).json({ received: true });
