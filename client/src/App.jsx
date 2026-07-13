@@ -4,6 +4,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import NotFound from "./pages/NotFound";
 import MovieDetails from "./pages/MovieDetails";
+import SeatSelection from "./pages/SeatSelection";
 import MainLayout from "./layouts/MainLayout";
 import { AuthProvider } from "./context/AuthContext";
 import SeatSelection from "./pages/SeatSelection";
