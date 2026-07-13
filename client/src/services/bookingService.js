@@ -19,3 +19,4 @@ export const getMyBookings = () => api.get("/bookings/my").then((res) => res.dat
  
 export const cancelBooking = (id) =>
   api.put(`/bookings/${id}/cancel`).then((res) => res.data);
+ 

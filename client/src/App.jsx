@@ -7,6 +7,9 @@ import MovieDetails from "./pages/MovieDetails";
 import SeatSelection from "./pages/SeatSelection";
 import MainLayout from "./layouts/MainLayout";
 import { AuthProvider } from "./context/AuthContext";
+import SeatSelection from "./pages/SeatSelection";
+import BookingConfirmation from "./pages/BookingConfirmation";
+import MyBookings from "./pages/MyBookings";
 
 import "./App.css";
 
@@ -21,6 +24,8 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/movies/:id" element={<MovieDetails />} />
             <Route path="/shows/:showId/seats" element={<SeatSelection />} />
+            <Route path="/my-bookings" element={<MyBookings />} />
+            <Route path="/bookings/:id" element={<BookingConfirmation />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

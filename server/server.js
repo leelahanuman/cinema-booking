@@ -36,6 +36,11 @@ const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || "*" },
 });
 
+// Make io reachable from any controller via req.app.get("io") — used by
+// bookingController.js's cancelBooking to broadcast "seatsReleased" so live
+// seat maps update immediately when a booking is cancelled.
+app.set("io", io);
+
 registerSocketHandlers(io);
 
 const PORT = process.env.PORT || 5000;

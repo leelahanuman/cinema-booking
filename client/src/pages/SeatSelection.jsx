@@ -3,25 +3,31 @@ import { useNavigate, useParams } from "react-router-dom";
 import { getShowById, createBooking } from "../services/bookingService";
 import { getSocket } from "../services/socketService";
 import SeatCountModal from "../components/SeatCountModal";
-
 // Matches server/models/Show.js seat sub-document: { seatId, row, number, category, status, lockedBy }
-const CATEGORY_LABEL = { premium: "Premium", classic: "Classic" };
+// status is one of "available" | "locked" | "booked" (server/socket/socketHandlers.js, server/controllers/bookingController.js)
+
+// Seat sub-document only has { seatId, status, lockedBy, lockedAt } — row/number
+// are NOT stored separately, so we parse them out of seatId (e.g. "A1" -> row "A", number 1).
+function parseSeatId(seatId) {
+  const match = /^([A-Za-z]+)(\d+)$/.exec(seatId || "");
+  if (!match) return { row: seatId || "?", number: 0 };
+  return { row: match[1], number: Number(match[2]) };
+}
 
 export default function SeatSelection() {
   const { showId } = useParams();
   const navigate = useNavigate();
   const socketRef = useRef(null);
-
+  // Seat Count Modal State
+  const [showSeatModal, setShowSeatModal] = useState(true);
+  const [seatCount, setSeatCount] = useState(1);
   const [show, setShow] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(new Set());
   const [booking, setBooking] = useState(false);
 
-  // seat-count gate — shown once before the seat map is usable
-  const [seatCount, setSeatCount] = useState(1);
-  const [countLocked, setCountLocked] = useState(false);
-
+  // ---- fetch show + open socket room ----
   useEffect(() => {
     let cancelled = false;
 
@@ -42,8 +48,9 @@ export default function SeatSelection() {
     socketRef.current = socket;
     socket.emit("joinShow", showId);
 
+    // another user locked a seat -> reflect it live, unless it's a lock we hold ourselves
     const onSeatLocked = ({ seatId, lockedBy }) => {
-      if (lockedBy === socket.id) return;
+      if (lockedBy === socket.id) return; // our own optimistic update already applied
       setShow((prev) => patchSeat(prev, seatId, { status: "locked", lockedBy }));
     };
     const onSeatUnlocked = ({ seatId }) => {
@@ -65,15 +72,17 @@ export default function SeatSelection() {
       });
     };
     const onSeatUnavailable = ({ seatId }) => {
+      // server rejected our lock attempt (already booked or locked by someone else)
       setSelected((prev) => dropSeat(prev, seatId));
       setError(`Seat ${seatId} was just taken. Pick another one.`);
     };
     const onSeatsReleased = async () => {
+      // some socket disconnected and freed locks (server/socket/socketHandlers.js disconnect handler)
       try {
         const fresh = await getShowById(showId);
         if (!cancelled) setShow(fresh);
       } catch {
-        /* next interaction will resync */
+        /* ignore - next interaction will resync */
       }
     };
 
@@ -94,6 +103,7 @@ export default function SeatSelection() {
     };
   }, [showId]);
 
+  // ---- derived data ----
   const rows = useMemo(() => groupByRow(show?.seats || []), [show]);
 
   const selectedSeats = useMemo(
@@ -101,34 +111,36 @@ export default function SeatSelection() {
     [show, selected]
   );
 
-  // bookingController.createBooking bills seats.length * show.price (flat rate,
-  // no per-category pricing yet) — this mirrors that so the total shown matches
-  // what actually gets charged.
+  // NOTE: bookingController.createBooking currently bills seats.length * show.price
+  // (server/controllers/bookingController.js) — it does not yet vary price by category.
+  // This total mirrors that flat rate so what the user sees matches what gets charged.
+  // If you want Premium/Classic priced differently, that needs a small backend change too.
   const total = selectedSeats.length * (show?.price || 0);
 
+  // ---- interactions ----
   const toggleSeat = (seat) => {
     const socket = socketRef.current;
     if (!socket || !show) return;
+
     if (seat.status === "booked") return;
-    if (seat.status === "locked" && seat.lockedBy !== socket.id) return;
+    if (seat.status === "locked" && seat.lockedBy !== socket.id) return; // someone else has it
 
     if (selected.has(seat.seatId)) {
       socket.emit("unlockSeat", { showId, seatId: seat.seatId });
       setSelected((prev) => dropSeat(prev, seat.seatId));
       setShow((prev) => patchSeat(prev, seat.seatId, { status: "available", lockedBy: null }));
-      return;
-    }
-
-    if (selected.size >= seatCount) {
-      setError(
-        `You picked ${seatCount} seat${seatCount !== 1 ? "s" : ""} — deselect one first, or start over with a higher count.`
+    } else {
+      if (selected.size >= seatCount) {
+        setError(`You can only pick ${seatCount} seat${seatCount > 1 ? "s" : ""}. Deselect one first.`);
+        return;
+      }
+      socket.emit("lockSeat", { showId, seatId: seat.seatId });
+      // optimistic: assume the lock succeeds; seatUnavailable will correct us if not
+      setSelected((prev) => new Set(prev).add(seat.seatId));
+      setShow((prev) =>
+        patchSeat(prev, seat.seatId, { status: "locked", lockedBy: socketRef.current.id })
       );
-      return;
     }
-
-    socket.emit("lockSeat", { showId, seatId: seat.seatId });
-    setSelected((prev) => new Set(prev).add(seat.seatId));
-    setShow((prev) => patchSeat(prev, seat.seatId, { status: "locked", lockedBy: socket.id }));
   };
 
   const confirmBooking = async () => {
@@ -140,7 +152,10 @@ export default function SeatSelection() {
         showId,
         seats: selectedSeats.map((s) => s.seatId),
       });
-      socketRef.current.emit("seatBooked", { showId, seats: selectedSeats.map((s) => s.seatId) });
+      socketRef.current.emit("seatBooked", {
+        showId,
+        seats: selectedSeats.map((s) => s.seatId),
+      });
       navigate(`/bookings/${result._id}`, { state: { booking: result } });
     } catch (err) {
       setError(err?.response?.data?.message || "Could not confirm booking — please retry");
@@ -153,157 +168,147 @@ export default function SeatSelection() {
   if (!show) return <div className="p-8 text-center text-red-400">{error || "Show not found"}</div>;
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 pb-32">
-      <SeatCountModal
-        open={!countLocked}
-        max={10}
-        count={seatCount}
-        onChangeCount={setSeatCount}
-        onConfirm={() => setCountLocked(true)}
-        movieTitle={show.movie?.title}
-      />
+    <>
+      <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_#1a2036_0%,_#0a0d18_60%)] text-white flex flex-col">
 
-      <header className="px-4 pt-6 pb-4 text-center">
-        <h1 className="text-2xl font-bold uppercase tracking-wide">{show.movie?.title}</h1>
-        <p className="text-sm text-neutral-400">
-          {show.theater?.name} · {formatShowTime(show)}
-        </p>
-      </header>
+        {/* Header */}
+        <div className="pt-6 pb-2 text-center">
+          <h1 className="text-lg font-semibold">
+            {show.movie?.title}
+          </h1>
 
-      {error && (
-        <div className="mx-4 mb-4 rounded-md bg-red-950/60 border border-red-800 px-3 py-2 text-sm text-red-300">
-          {error}
+          <p className="text-xs text-gray-400 mt-1">
+            {show.theater?.name} •{" "}
+            {formatShowDateTime(show.date, show.time)}
+          </p>
         </div>
-      )}
 
-      <Screen />
+        {error && (
+          <p className="text-center text-xs text-red-400 mt-1 mb-1">{error}</p>
+        )}
 
-      <div className="mx-auto mt-8 flex max-w-2xl flex-col items-center gap-2 px-4">
-        {rows.map(({ row, seats }, rowIndex) => (
-          <SeatRow
-            key={row}
-            row={row}
-            seats={seats}
-            rowIndex={rowIndex}
-            totalRows={rows.length}
-            selected={selected}
-            onToggle={toggleSeat}
-          />
-        ))}
-      </div>
-
-      <div className="mt-10 flex justify-center gap-6 text-xs text-neutral-400">
-        <Legend swatch="bg-neutral-700" label="Available" />
-        <Legend swatch="bg-amber-400" label="Selected" />
-        <Legend swatch="bg-neutral-800 border border-neutral-600" label="Locked" />
-        <Legend swatch="bg-neutral-800/50" label="Booked" />
-      </div>
-
-      <div className="fixed inset-x-0 bottom-0 border-t border-neutral-800 bg-neutral-900/95 backdrop-blur px-4 py-3">
-        <div className="mx-auto flex max-w-md items-center justify-between">
-          <div>
-            <p className="text-sm text-neutral-400">
-              {selectedSeats.length}/{seatCount} seat{seatCount !== 1 ? "s" : ""}
+        {/* Screen */}
+        <div className="flex justify-center mt-4 mb-8">
+          <div className="w-[70%] max-w-md">
+            <div
+              className="h-4 bg-gradient-to-b from-slate-200/80 to-slate-400/10"
+              style={{
+                borderRadius: "50% 50% 0 0 / 100% 100% 0 0",
+                boxShadow: "0 6px 24px 4px rgba(180,200,255,0.25)",
+              }}
+            />
+            <p className="text-center text-[10px] tracking-[6px] text-gray-500 mt-2">
+              SCREEN
             </p>
-            <p className="text-base font-semibold">₹{total}</p>
           </div>
-          <button
-            onClick={confirmBooking}
-            disabled={selectedSeats.length === 0 || booking}
-            className="rounded-lg bg-rose-500 px-6 py-3 font-semibold text-white disabled:opacity-40"
-          >
-            {booking ? "Booking…" : "Select Seats"}
-          </button>
+        </div>
+
+        {/* Seats */}
+        <div className="flex justify-center px-4 overflow-x-auto flex-1">
+          <div className="bg-white/[0.03] rounded-2xl px-6 py-6">
+            <div className="space-y-1.5">
+              {rows.map(({ row, seats }) => {
+                const third = Math.max(1, Math.round(seats.length / 3));
+                return (
+                  <div key={row} className="flex items-center gap-3">
+                    <div className="w-3 text-[10px] text-gray-500 text-right shrink-0">
+                      {row}
+                    </div>
+
+                    <div className="flex items-center gap-[3px]">
+                      {seats.map((seat, index) => (
+                        <div key={seat.seatId} className="flex items-center gap-[3px]">
+                          {(index === third || index === third * 2) && (
+                            <div className="w-2" />
+                          )}
+                          <SeatButton
+                            seat={seat}
+                            isMine={selected.has(seat.seatId)}
+                            onClick={() => toggleSeat(seat)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom */}
+        <div className="mt-4 bg-[#0d1120] border-t border-white/5">
+          <div className="flex justify-center gap-8 py-4">
+            <Legend swatch="bg-slate-400" label="Available" />
+            <Legend swatch="bg-yellow-400" label="Selected" />
+            <Legend swatch="bg-slate-700" label="Reserved" />
+          </div>
+
+          <div className="border-t border-white/5 px-6 py-4 flex justify-between items-center">
+            <div>
+              <p className="text-sm text-gray-400">
+                {selectedSeats.length} Seat{selectedSeats.length !== 1 ? "s" : ""}
+              </p>
+              <p className="text-xl font-bold">
+                ₹{total}
+              </p>
+            </div>
+
+            <button
+              onClick={confirmBooking}
+              disabled={selectedSeats.length === 0 || booking}
+              className="bg-yellow-400 text-black font-semibold px-7 py-3 rounded-lg disabled:opacity-50"
+            >
+              {booking ? "Booking..." : "Select Seats"}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+
+      <SeatCountModal
+        open={showSeatModal}
+        movieTitle={show.movie?.title}
+        count={seatCount}
+        max={10}
+        price={show.price}
+        onChangeCount={setSeatCount}
+        onConfirm={() => setShowSeatModal(false)}
+        onSkip={() => setShowSeatModal(false)}
+      />
+    </>
   );
 }
 
-function Screen() {
-  return (
-    <div className="mx-auto mt-2 w-full max-w-xl px-6">
-      <svg viewBox="0 0 400 40" className="w-full">
-        <path
-          d="M10 30 Q200 -5 390 30"
-          fill="none"
-          stroke="url(#screenGlow)"
-          strokeWidth="4"
-          strokeLinecap="round"
-        />
-        <defs>
-          <linearGradient id="screenGlow" x1="0" x2="1">
-            <stop offset="0" stopColor="#3f3f46" />
-            <stop offset="0.5" stopColor="#facc15" stopOpacity="0.7" />
-            <stop offset="1" stopColor="#3f3f46" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <p className="mt-1 text-center text-[11px] tracking-[0.3em] text-neutral-500">SCREEN</p>
-    </div>
-  );
-}
-
-// Rows curve like a real auditorium: front rows arc more, seats near the
-// row's edges lift slightly, mimicking stadium seating around the screen.
-function SeatRow({ row, seats, rowIndex, totalRows, selected, onToggle }) {
-  const center = (seats.length - 1) / 2;
-  const curveStrength = 10 * (1 - rowIndex / Math.max(totalRows - 1, 1)); // px, decays toward the back
-
-  return (
-    <div className="flex items-end gap-1.5">
-      <span className="mr-1 w-4 text-right text-[11px] text-neutral-500">{row}</span>
-      {seats.map((seat, i) => {
-        const dist = center === 0 ? 0 : (i - center) / center;
-        const lift = curveStrength * dist * dist;
-        return (
-          <SeatButton
-            key={seat.seatId}
-            seat={seat}
-            isMine={selected.has(seat.seatId)}
-            style={{ transform: `translateY(${lift}px)` }}
-            onClick={() => onToggle(seat)}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function SeatButton({ seat, isMine, style, onClick }) {
-  const base =
-    "h-6 w-6 rounded-t-md text-[9px] flex items-center justify-center border transition-colors";
-  let cls = "bg-neutral-700 border-neutral-600 hover:bg-neutral-600 cursor-pointer";
+function SeatButton({ seat, isMine, onClick }) {
+  let color = "bg-slate-400 hover:bg-slate-300 text-transparent";
   let disabled = false;
 
   if (seat.status === "booked") {
-    cls = "bg-neutral-800/50 border-neutral-800 text-neutral-600 cursor-not-allowed";
+    color = "bg-slate-700/70 text-transparent cursor-not-allowed";
     disabled = true;
   } else if (seat.status === "locked" && !isMine) {
-    cls = "bg-neutral-800 border-neutral-600 text-neutral-500 cursor-not-allowed";
+    color = "bg-slate-600/70 text-transparent cursor-not-allowed";
     disabled = true;
   } else if (isMine) {
-    cls = "bg-amber-400 border-amber-300 text-neutral-900 cursor-pointer";
+    color = "bg-yellow-400 text-black font-semibold";
   }
 
   return (
     <button
-      type="button"
-      title={`${seat.seatId} · ${CATEGORY_LABEL[seat.category] || seat.category || ""}`}
       disabled={disabled}
       onClick={onClick}
-      style={style}
-      className={`${base} ${cls}`}
+      title={seat.seatId}
+      className={`w-[13px] h-[13px] rounded-[3px] text-[7px] leading-none transition-transform active:scale-90 ${color}`}
     >
-      {seat.number}
+      {isMine ? parseSeatId(seat.seatId).number : ""}
     </button>
   );
 }
 
 function Legend({ swatch, label }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <span className={`inline-block h-3 w-3 rounded-sm ${swatch}`} />
+    <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+      <span className={`w-2.5 h-2.5 rounded-full ${swatch}`}></span>
       {label}
     </div>
   );
@@ -313,17 +318,24 @@ function Legend({ swatch, label }) {
 function groupByRow(seats) {
   const map = new Map();
   seats.forEach((seat) => {
-    if (!map.has(seat.row)) map.set(seat.row, []);
-    map.get(seat.row).push(seat);
+    const { row } = parseSeatId(seat.seatId);
+    if (!map.has(row)) map.set(row, []);
+    map.get(row).push(seat);
   });
   return [...map.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([row, list]) => ({ row, seats: list.sort((a, b) => a.number - b.number) }));
+    .map(([row, list]) => ({
+      row,
+      seats: list.sort((a, b) => parseSeatId(a.seatId).number - parseSeatId(b.seatId).number),
+    }));
 }
 
 function patchSeat(show, seatId, patch) {
   if (!show) return show;
-  return { ...show, seats: show.seats.map((s) => (s.seatId === seatId ? { ...s, ...patch } : s)) };
+  return {
+    ...show,
+    seats: show.seats.map((s) => (s.seatId === seatId ? { ...s, ...patch } : s)),
+  };
 }
 
 function dropSeat(set, seatId) {
@@ -332,15 +344,14 @@ function dropSeat(set, seatId) {
   return next;
 }
 
-// Show docs have used different field names in this project (screenTime,
-// showTime, startTime, date). Try each and fall back gracefully instead of
-// rendering "Invalid Date".
-function formatShowTime(show) {
-  const candidate = show.screenTime || show.showTime || show.startTime || show.date;
-  if (!candidate) return "Time unavailable";
-  const d = new Date(candidate);
-  if (Number.isNaN(d.getTime())) return "Time unavailable";
-  return d.toLocaleString(undefined, {
+// Show schema stores date ("YYYY-MM-DD") and time ("HH:mm") as separate strings,
+// not a combined screenTime — combine them here instead of new Date(show.screenTime),
+// which was always Invalid Date.
+function formatShowDateTime(date, time) {
+  if (!date || !time) return "Time unavailable";
+  const parsed = new Date(`${date}T${time}`);
+  if (Number.isNaN(parsed.getTime())) return `${date} ${time}`;
+  return parsed.toLocaleString(undefined, {
     weekday: "short",
     day: "numeric",
     month: "short",
