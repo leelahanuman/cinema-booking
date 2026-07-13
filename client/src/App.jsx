@@ -24,11 +24,8 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route path="/movies/:id" element={<MovieDetails />} />
             <Route path="/shows/:showId/seats" element={<SeatSelection />} />
-<<<<<<< HEAD
             <Route path="/my-bookings" element={<MyBookings />} />
             <Route path="/bookings/:id" element={<BookingConfirmation />} />
-=======
->>>>>>> 3029e4fd58e407cf7266c11137687d03c8039fef
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
